@@ -74,7 +74,11 @@ async function findOrCreateGroup(
 
 /**
  * Map a raw row label to a canonical Concept. Idempotent: repeated calls with
- * the same `rawName` resolve to the same concept via alias lookup.
+ * the same `(rawName, groupHint)` resolve to the same concept via alias lookup.
+ *
+ * Lookup is scoped by group: the same name can legitimately appear in two
+ * groups (e.g. "ANULACIONES Y DESCUENTOS" exists in both HOSPEDAJE and
+ * LAVANDERIA/TINTORERIA), and they are semantically distinct concepts.
  */
 export async function normalizeConcept(
   rawName: string,
@@ -86,13 +90,21 @@ export async function normalizeConcept(
     throw new Error('normalizeConcept: rawName is empty');
   }
 
-  // 1. Alias lookup — exact match against any element of rawAliases.
+  // 1. Resolve (or auto-create) the group first, since alias lookup is scoped to it.
+  const groupId = groupHint
+    ? (await findOrCreateGroup(reportTypeId, groupHint)).id
+    : null;
+
+  // 2. Alias lookup — exact match against rawAliases, scoped by group.
   const aliasMatch = await db
     .select()
     .from(schema.concepts)
     .where(
       and(
         eq(schema.concepts.reportTypeId, reportTypeId),
+        groupId === null
+          ? sql`${schema.concepts.groupId} IS NULL`
+          : eq(schema.concepts.groupId, groupId),
         sql`${schema.concepts.rawAliases} @> ARRAY[${name}]::text[]`,
       ),
     )
@@ -101,12 +113,23 @@ export async function normalizeConcept(
     return { concept: toConcept(aliasMatch[0]), source: 'alias' };
   }
 
-  // 2. Resolve (or auto-create) the group.
-  const groupId = groupHint
-    ? (await findOrCreateGroup(reportTypeId, groupHint)).id
-    : null;
+  // 3. Insert new concept. sortOrder = max within group + 10 so concepts
+  // appear in discovery order (which matches the PDF's natural order if we
+  // ingest months chronologically). needs_review=true surfaces it in /conceptos.
+  const [{ maxOrder }] = await db
+    .select({
+      maxOrder: sql<number>`COALESCE(MAX(${schema.concepts.sortOrder}), 0)::int`,
+    })
+    .from(schema.concepts)
+    .where(
+      and(
+        eq(schema.concepts.reportTypeId, reportTypeId),
+        groupId === null
+          ? sql`${schema.concepts.groupId} IS NULL`
+          : eq(schema.concepts.groupId, groupId),
+      ),
+    );
 
-  // 3. Insert new concept with needs_review=true so it surfaces in the UI.
   const [created] = await db
     .insert(schema.concepts)
     .values({
@@ -114,7 +137,7 @@ export async function normalizeConcept(
       groupId,
       canonicalName: name,
       rawAliases: [name],
-      sortOrder: 0,
+      sortOrder: maxOrder + 10,
       isSubtotal: false,
       metricKind: 'currency',
       needsReview: true,

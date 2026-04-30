@@ -106,7 +106,16 @@ export const concepts = pgTable(
     metricKind: text('metric_kind').notNull().default('currency'),
     needsReview: boolean('needs_review').notNull().default(false),
   },
-  (t) => [uniqueIndex('concepts_type_canonical_uq').on(t.reportTypeId, t.canonicalName)],
+  (t) => [
+    // Scoped by group: the same canonical name can legitimately appear in
+    // multiple groups (e.g. "ANULACIONES Y DESCUENTOS" exists in both
+    // HOSPEDAJE and LAVANDERIA/TINTORERIA in real RDS exports).
+    uniqueIndex('concepts_type_group_canonical_uq').on(
+      t.reportTypeId,
+      t.groupId,
+      t.canonicalName,
+    ),
+  ],
 );
 
 /** One row per uploaded month. UNIQUE(reportTypeId, period) → re-upload replaces. */
