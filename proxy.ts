@@ -1,14 +1,23 @@
 /**
- * Edge middleware — protects everything outside `/login` behind Auth.js.
- * Uses the runtime-agnostic auth.config (no DB / Node-only deps).
+ * Next 16 proxy (formerly middleware) — protects everything outside `/login`
+ * behind Auth.js. Uses the runtime-agnostic `auth.config` (no DB / Node-only
+ * deps) so it can run on the edge.
+ *
+ * NB: Auth.js v5's `authorized` callback alone doesn't auto-redirect under
+ * Next 16's proxy convention — we redirect explicitly here.
  */
 import NextAuth from 'next-auth';
+import { NextResponse } from 'next/server';
 import { authConfig } from './auth.config';
 
-export const { auth: middleware } = NextAuth(authConfig);
+const { auth } = NextAuth(authConfig);
 
-export default middleware((req) => {
-  // Authorized callback in authConfig handles the redirect logic.
+export default auth((req) => {
+  const isOnLogin = req.nextUrl.pathname.startsWith('/login');
+  if (!req.auth && !isOnLogin) {
+    const loginUrl = new URL('/login', req.nextUrl.origin);
+    return NextResponse.redirect(loginUrl);
+  }
   return undefined;
 });
 

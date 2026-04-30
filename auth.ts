@@ -14,7 +14,9 @@ import { db } from '@/lib/db';
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...authConfig,
   adapter: DrizzleAdapter(db),
-  session: { strategy: 'database' },
+  // JWT strategy lets the edge proxy read sessions without DB access.
+  // Adapter still persists users/accounts/verificationTokens.
+  session: { strategy: 'jwt' },
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY,
