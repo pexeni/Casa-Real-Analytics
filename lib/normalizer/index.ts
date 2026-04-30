@@ -2,22 +2,124 @@
  * Concept normalizer.
  *
  * Maps raw row labels (from the PDF) to canonical Concept rows in the DB.
- * Pipeline: alias lookup → fuzzy match (Levenshtein ≤ 2) → LLM classification (OpenRouter).
- * Unknown concepts are inserted with `needs_review = true` and surface in /conceptos.
+ *
+ * V0 strategy (current): exact alias lookup → auto-create with needs_review=true.
+ *   Fuzzy match (Levenshtein) and LLM classification are deferred — YAGNI until
+ *   we observe duplicate concepts in production. The PDF is consistent enough
+ *   that exact alias lookup catches everything across our 4-month fixture set.
+ *
+ * Auto-discovers report_groups too: if the parser yields a group not seeded
+ * (e.g. EVENTOS, COMUNICACIONES), the normalizer creates it with kind='revenue'
+ * by default. A human can re-classify via /conceptos later.
  *
  * See: docs/design/mvp.md §6 (step 6).
  */
-import type { Concept, ReportTypeId } from '@/lib/domain/types';
+import { db, schema } from '@/lib/db';
+import type { Concept, MetricKind, ReportTypeId } from '@/lib/domain/types';
+import { and, eq, sql } from 'drizzle-orm';
 
 export interface NormalizeResult {
   concept: Concept;
   source: 'alias' | 'fuzzy' | 'llm' | 'unmapped';
 }
 
+type ConceptRow = typeof schema.concepts.$inferSelect;
+
+function toConcept(row: ConceptRow): Concept {
+  return {
+    id: row.id,
+    reportTypeId: row.reportTypeId as ReportTypeId,
+    groupId: row.groupId,
+    canonicalName: row.canonicalName,
+    rawAliases: row.rawAliases,
+    sortOrder: row.sortOrder,
+    isSubtotal: row.isSubtotal,
+    metricKind: row.metricKind as MetricKind,
+    needsReview: row.needsReview,
+  };
+}
+
+/**
+ * Find or create a report_group for a given (reportTypeId, name).
+ * Auto-created groups default to kind='revenue' and sortOrder=999.
+ */
+async function findOrCreateGroup(
+  reportTypeId: ReportTypeId,
+  name: string,
+): Promise<{ id: string; name: string }> {
+  const existing = await db
+    .select({ id: schema.reportGroups.id, name: schema.reportGroups.name })
+    .from(schema.reportGroups)
+    .where(
+      and(
+        eq(schema.reportGroups.reportTypeId, reportTypeId),
+        eq(schema.reportGroups.name, name),
+      ),
+    )
+    .limit(1);
+  if (existing.length > 0) return existing[0];
+
+  const [created] = await db
+    .insert(schema.reportGroups)
+    .values({
+      reportTypeId,
+      name,
+      displayName: `Grupo ${name}`,
+      kind: 'revenue',
+      sortOrder: 999,
+    })
+    .returning({ id: schema.reportGroups.id, name: schema.reportGroups.name });
+  return created;
+}
+
+/**
+ * Map a raw row label to a canonical Concept. Idempotent: repeated calls with
+ * the same `rawName` resolve to the same concept via alias lookup.
+ */
 export async function normalizeConcept(
-  _rawName: string,
-  _groupHint: string | null,
-  _reportTypeId: ReportTypeId,
+  rawName: string,
+  groupHint: string | null,
+  reportTypeId: ReportTypeId,
 ): Promise<NormalizeResult> {
-  throw new Error('normalizeConcept: not implemented yet');
+  const name = rawName.trim();
+  if (!name) {
+    throw new Error('normalizeConcept: rawName is empty');
+  }
+
+  // 1. Alias lookup — exact match against any element of rawAliases.
+  const aliasMatch = await db
+    .select()
+    .from(schema.concepts)
+    .where(
+      and(
+        eq(schema.concepts.reportTypeId, reportTypeId),
+        sql`${schema.concepts.rawAliases} @> ARRAY[${name}]::text[]`,
+      ),
+    )
+    .limit(1);
+  if (aliasMatch.length > 0) {
+    return { concept: toConcept(aliasMatch[0]), source: 'alias' };
+  }
+
+  // 2. Resolve (or auto-create) the group.
+  const groupId = groupHint
+    ? (await findOrCreateGroup(reportTypeId, groupHint)).id
+    : null;
+
+  // 3. Insert new concept with needs_review=true so it surfaces in the UI.
+  const [created] = await db
+    .insert(schema.concepts)
+    .values({
+      reportTypeId,
+      groupId,
+      canonicalName: name,
+      rawAliases: [name],
+      sortOrder: 0,
+      isSubtotal: false,
+      metricKind: 'currency',
+      needsReview: true,
+    })
+    .returning();
+
+  return { concept: toConcept(created), source: 'unmapped' };
 }
