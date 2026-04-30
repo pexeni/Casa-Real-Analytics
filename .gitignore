@@ -69,3 +69,6 @@ data/interim/
 
 # Claude Code local config
 .claude/
+
+.vercel
+.env*.local
