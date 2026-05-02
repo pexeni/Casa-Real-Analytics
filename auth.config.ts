@@ -29,6 +29,18 @@ export const authConfig = {
       if (isOnApp) return isLoggedIn;
       return true;
     },
+    // With JWT strategy the adapter still creates the user row, but the
+    // user.id only reaches the JWT during sign-in. Persist it on `token.sub`
+    // and rehydrate it onto session.user.id on every read so API routes
+    // (which check `session.user.id`) can authorize correctly.
+    jwt({ token, user }) {
+      if (user?.id) token.sub = user.id;
+      return token;
+    },
+    session({ session, token }) {
+      if (session.user && token.sub) session.user.id = token.sub;
+      return session;
+    },
   },
   providers: [],
 } satisfies NextAuthConfig;
