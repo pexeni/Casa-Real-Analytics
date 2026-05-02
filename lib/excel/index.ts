@@ -66,10 +66,13 @@ function monthLabelEs(period: Date): string {
   return MONTHS_ES[period.getUTCMonth()] ?? '';
 }
 
+type GroupKind = 'revenue' | 'totals' | 'stats' | 'kpi';
+
 interface GroupBlock {
   groupId: string;
   name: string;
   displayName: string;
+  kind: GroupKind;
   sortOrder: number;
   concepts: ConceptRow[];
 }
@@ -109,11 +112,11 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
     .where(eq(schema.reportGroups.reportTypeId, reportTypeId))
     .orderBy(asc(schema.reportGroups.sortOrder));
 
-  // We only render revenue/totals groups in the Acumulados sheet for MVP.
-  // Stats and KPI groups (auto-discovered later) get their own future treatment.
-  const renderableGroups = groupsRows.filter(
-    (g) => g.kind === 'revenue' || g.kind === 'totals',
-  );
+  // Render all four kinds (revenue, totals, stats, kpi). Subtotal rows are
+  // suppressed for stats/kpi blocks below — summing %s or room counts is
+  // meaningless. Empty groups (no concepts yet) are filtered out at block
+  // construction time so legacy KPI rows from earlier seeds don't leak in.
+  const renderableGroups = groupsRows;
 
   // 3. Concepts for this report type.
   const conceptsRows = await db
@@ -147,25 +150,29 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
     valueMap.set(`${v.periodId}::${v.conceptId}`, Number(v.valorAcumulado));
   }
 
-  // 5. Build group blocks.
-  const blocks: GroupBlock[] = renderableGroups.map((g) => {
-    const groupConcepts = conceptsRows.filter((c) => c.groupId === g.id);
-    return {
-      groupId: g.id,
-      name: g.name,
-      displayName: g.displayName,
-      sortOrder: g.sortOrder,
-      concepts: groupConcepts.map((c) => ({
-        conceptId: c.id,
-        canonicalName: c.canonicalName,
-        sortOrder: c.sortOrder,
-        values: periodsRows.map((p) => {
-          const v = valueMap.get(`${p.id}::${c.id}`);
-          return v === undefined ? null : v;
-        }),
-      })),
-    };
-  });
+  // 5. Build group blocks. Drop empty groups so the workbook never shows a
+  // header with no rows below it (e.g. an old "KPI" placeholder).
+  const blocks: GroupBlock[] = renderableGroups
+    .map((g): GroupBlock => {
+      const groupConcepts = conceptsRows.filter((c) => c.groupId === g.id);
+      return {
+        groupId: g.id,
+        name: g.name,
+        displayName: g.displayName,
+        kind: g.kind as GroupKind,
+        sortOrder: g.sortOrder,
+        concepts: groupConcepts.map((c) => ({
+          conceptId: c.id,
+          canonicalName: c.canonicalName,
+          sortOrder: c.sortOrder,
+          values: periodsRows.map((p) => {
+            const v = valueMap.get(`${p.id}::${c.id}`);
+            return v === undefined ? null : v;
+          }),
+        })),
+      };
+    })
+    .filter((b) => b.concepts.length > 0);
 
   // 6. Render workbook.
   const wb = new ExcelJS.Workbook();
@@ -202,11 +209,20 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
     headerRow.getCell(2 + i).alignment = { horizontal: 'center' };
   }
 
-  // Body: groups → concepts → subtotal → blank.
+  // Body: groups → concepts → (subtotal) → blank.
   let rowIdx = 5;
   for (const block of blocks) {
-    // Group header.
-    const groupHeaderName = `GRUPO ${block.name.toUpperCase()}`;
+    // Subtotals only make sense for monetary blocks. For stats (room counts,
+    // %Ocupación) and kpi (REVPAR, ratios) summing across rows is misleading,
+    // so we suppress the subtotal row entirely.
+    const showSubtotal = block.kind === 'revenue' || block.kind === 'totals';
+
+    // Group header — use displayName to keep the casing the seed already
+    // chose ("Estadísticas", "Indicadores Financieros") instead of forcing
+    // ALL CAPS like we do for revenue/totals legacy blocks.
+    const groupHeaderName = showSubtotal
+      ? `GRUPO ${block.name.toUpperCase()}`
+      : block.displayName.toUpperCase();
     ws.getCell(rowIdx, 1).value = groupHeaderName;
     ws.getCell(rowIdx, 1).font = { bold: true };
     rowIdx++;
@@ -227,19 +243,21 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
       rowIdx++;
     }
 
-    // Subtotal row. Round to 2 decimals to avoid float-accumulation drift
-    // (e.g. 201572711.70000002).
-    const subtotalLabel = `Subtotal ${titleCaseEs(block.name)}`;
-    const subtotalRowCell = ws.getCell(rowIdx, 1);
-    subtotalRowCell.value = subtotalLabel;
-    subtotalRowCell.font = { bold: true };
-    for (let i = 0; i < periodsRows.length; i++) {
-      const cell = ws.getCell(rowIdx, 2 + i);
-      cell.value = Math.round(subtotals[i] * 100) / 100;
-      cell.numFmt = '#,##0.00;[Red]-#,##0.00';
-      cell.font = { bold: true };
+    if (showSubtotal) {
+      // Subtotal row. Round to 2 decimals to avoid float-accumulation drift
+      // (e.g. 201572711.70000002).
+      const subtotalLabel = `Subtotal ${titleCaseEs(block.name)}`;
+      const subtotalRowCell = ws.getCell(rowIdx, 1);
+      subtotalRowCell.value = subtotalLabel;
+      subtotalRowCell.font = { bold: true };
+      for (let i = 0; i < periodsRows.length; i++) {
+        const cell = ws.getCell(rowIdx, 2 + i);
+        cell.value = Math.round(subtotals[i] * 100) / 100;
+        cell.numFmt = '#,##0.00;[Red]-#,##0.00';
+        cell.font = { bold: true };
+      }
+      rowIdx++;
     }
-    rowIdx++;
 
     // Blank separator.
     rowIdx++;

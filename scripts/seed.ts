@@ -17,17 +17,21 @@ const REPORT_TYPE_ID = 'RDS';
  * `sortOrder` matches PDF appearance order.
  */
 const GROUPS = [
-  { name: 'HOSPEDAJE',            displayName: 'Grupo HOSPEDAJE',            kind: 'revenue', sortOrder: 10 },
-  { name: 'ALIMENTOS Y BEBIDAS',  displayName: 'Grupo ALIMENTOS Y BEBIDAS',  kind: 'revenue', sortOrder: 20 },
-  { name: 'EVENTOS',              displayName: 'Grupo EVENTOS',              kind: 'revenue', sortOrder: 25 },
-  { name: 'SPA CLUB',             displayName: 'Grupo SPA CLUB',             kind: 'revenue', sortOrder: 30 },
-  { name: 'LAVANDERIA/TINTORERIA',displayName: 'Grupo LAVANDERIA/TINTORERIA',kind: 'revenue', sortOrder: 40 },
-  { name: 'COMUNICACIONES',       displayName: 'Grupo COMUNICACIONES',       kind: 'revenue', sortOrder: 45 },
-  { name: 'CARGOS VARIOS',        displayName: 'Grupo CARGOS VARIOS',        kind: 'revenue', sortOrder: 50 },
-  { name: 'FORMAS DE COBRO',      displayName: 'Grupo FORMAS DE COBRO',      kind: 'totals',  sortOrder: 60 },
-  { name: 'IMPUESTOS',            displayName: 'Grupo IMPUESTOS',            kind: 'totals',  sortOrder: 70 },
-  { name: 'ESTADISTICAS',         displayName: 'Estadísticas',               kind: 'stats',   sortOrder: 80 },
-  { name: 'KPI',                  displayName: 'KPIs',                       kind: 'kpi',     sortOrder: 90 },
+  { name: 'HOSPEDAJE',                displayName: 'Grupo HOSPEDAJE',                kind: 'revenue', sortOrder: 10 },
+  { name: 'ALIMENTOS Y BEBIDAS',      displayName: 'Grupo ALIMENTOS Y BEBIDAS',      kind: 'revenue', sortOrder: 20 },
+  { name: 'EVENTOS',                  displayName: 'Grupo EVENTOS',                  kind: 'revenue', sortOrder: 25 },
+  { name: 'SPA CLUB',                 displayName: 'Grupo SPA CLUB',                 kind: 'revenue', sortOrder: 30 },
+  { name: 'LAVANDERIA/TINTORERIA',    displayName: 'Grupo LAVANDERIA/TINTORERIA',    kind: 'revenue', sortOrder: 40 },
+  { name: 'COMUNICACIONES',           displayName: 'Grupo COMUNICACIONES',           kind: 'revenue', sortOrder: 45 },
+  { name: 'CARGOS VARIOS',            displayName: 'Grupo CARGOS VARIOS',            kind: 'revenue', sortOrder: 50 },
+  { name: 'FORMAS DE COBRO',          displayName: 'Grupo FORMAS DE COBRO',          kind: 'totals',  sortOrder: 60 },
+  { name: 'IMPUESTOS',                displayName: 'Grupo IMPUESTOS',                kind: 'totals',  sortOrder: 70 },
+  // New section pulled from the right-hand block of the RDS PDF (Total / Saldos).
+  { name: 'TOTALES Y SALDOS',         displayName: 'Totales y Saldos',               kind: 'totals',  sortOrder: 75 },
+  { name: 'ESTADISTICAS',             displayName: 'Estadísticas',                   kind: 'stats',   sortOrder: 80 },
+  // Renamed from 'KPI' — concept rows referencing this group keep the same UUID
+  // (we look up by name during seed, not id), so this is a safe rename.
+  { name: 'INDICADORES FINANCIEROS',  displayName: 'Indicadores Financieros',        kind: 'kpi',     sortOrder: 90 },
 ] as const;
 
 async function main() {
