@@ -39,6 +39,24 @@ function isoDate(d: Date): string {
 }
 
 export async function POST(req: Request) {
+  try {
+    return await ingest(req);
+  } catch (err) {
+    // Last-resort handler — without this, an unhandled throw in Blob upload,
+    // normalizer, or DB insert would surface as Next's HTML error page and
+    // crash the client's res.json() parser. Always return JSON.
+    console.error('[/api/ingest] unhandled error:', err);
+    return NextResponse.json(
+      {
+        error: 'Internal server error',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function ingest(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -105,8 +123,10 @@ export async function POST(req: Request) {
   // 3. Upload to Vercel Blob.
   const periodKey = firstOfMonth(parsed.referenceDate);
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  // Private blob — only readable through `/api/pdf/[id]` after auth check.
+  // The store is configured with private access, so 'public' would 400.
   const blob = await put(`rds/${periodKey}/${Date.now()}-${safeName}`, file, {
-    access: 'public',
+    access: 'private',
     contentType: 'application/pdf',
   });
 
