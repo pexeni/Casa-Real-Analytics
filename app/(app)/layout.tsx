@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-6 px-6">
           <div className="flex items-center gap-8">
             <Link
-              href="/reportes"
+              href="/dashboard"
               className="flex items-center gap-2 font-semibold tracking-tight"
             >
               <span
@@ -28,6 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Casa Real Analytics
             </Link>
             <nav className="flex items-center gap-1">
+              <NavLink href="/dashboard">Dashboard</NavLink>
               <NavLink href="/reportes">Reportes</NavLink>
               <NavLink href="/conceptos">Conceptos</NavLink>
             </nav>
