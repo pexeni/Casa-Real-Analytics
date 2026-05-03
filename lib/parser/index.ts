@@ -14,15 +14,19 @@
 import { extractText, getDocumentProxy } from 'unpdf';
 import type { RawParsedReport, RawParsedRow } from '@/lib/domain/types';
 
-export const PARSER_VERSION = 'rds-v0.2.0';
+export const PARSER_VERSION = 'rds-v0.2.1';
 
 /**
- * Argentine number format: thousands `.`, decimal `,`, always 2 decimal places.
+ * Argentine number format: thousands `.`, decimal `,`, 1 or 2 decimal places.
+ * Most values come with 2 decimals, but the PMS occasionally truncates a
+ * trailing zero (`505235780,9` instead of `505235780,90`), notably on some
+ * Saldo rows.
  *   "1.293.462,42" → 1293462.42
  *   "-3.016,53"    → -3016.53
  *   "0,00"         → 0
+ *   "505235780,9"  → 505235780.9
  */
-const AR_NUMBER = String.raw`-?[\d.]+,\d{2}`;
+const AR_NUMBER = String.raw`-?[\d.]+,\d{1,2}`;
 
 /**
  * Concept row pattern. PDF text extraction concatenates `valorHoy` directly
@@ -43,7 +47,7 @@ const FECHA_REGEX = /Fecha:\s*(\d{2})\/(\d{2})\/(\d{4})/;
 
 /** `"1.293.462,42"` → `1293462.42`. Throws on malformed input. */
 export function parseARNumber(input: string): number {
-  if (!input || !/^-?[\d.]+,\d{2}$/.test(input)) {
+  if (!input || !/^-?[\d.]+,\d{1,2}$/.test(input)) {
     throw new Error(`Invalid Argentine number: ${JSON.stringify(input)}`);
   }
   const cleaned = input.replace(/\./g, '').replace(',', '.');
@@ -190,7 +194,7 @@ interface PositionedItem {
 const Y_TOL = 3.0;
 
 /** Numeric token (Argentine format OR plain integer). */
-const NUMERIC_RE = /^-?[\d.]+(?:,\d{2})?$/;
+const NUMERIC_RE = /^-?[\d.]+(?:,\d{1,2})?$/;
 
 /** Right-aligned column descriptor: a value belongs to this column if its
  *  `x + width` falls within `[xRightEnd - tol, xRightEnd + tol]`. */
