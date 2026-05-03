@@ -68,6 +68,27 @@ function monthLabelEs(period: Date): string {
 
 type GroupKind = 'revenue' | 'totals' | 'stats' | 'kpi';
 
+/**
+ * Pick a number format from the canonical concept name. The DB schema has a
+ * `metric_kind` column for this, but auto-discovered concepts default to
+ * 'currency' regardless of their real type, so the column isn't yet reliable.
+ * Heuristic: room counts → integer, anything starting with `%` or named
+ * `% Ocupación` → percentage, else currency.
+ */
+function pickNumFmt(canonicalName: string): string {
+  const n = canonicalName.trim();
+  if (/^%/.test(n)) return '0.00"%"'; // value is already in 0–100 (e.g. 50.91)
+  if (/^Habitaciones\b/i.test(n)) return '#,##0';
+  return '#,##0.00;[Red]-#,##0.00';
+}
+
+// Excel ARGB fills (AARRGGBB) — ExcelJS uses ARGB, not RGBA.
+const FILL_HEADER = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FF1E293B' } }; // slate-900
+const FILL_GROUP_REVENUE = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFE0E7FF' } }; // indigo-100
+const FILL_GROUP_OTHER = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFF1F5F9' } }; // slate-100
+const FILL_SUBTOTAL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFEEF2FF' } }; // indigo-50
+const BORDER_THIN_TOP = { top: { style: 'medium' as const, color: { argb: 'FF1E293B' } } };
+
 interface GroupBlock {
   groupId: string;
   name: string;
@@ -185,28 +206,43 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
 
   // Title rows (rows 1-3, merged).
   ws.mergeCells(1, 1, 1, totalCols);
-  ws.getCell(1, 1).value = 'CASA REAL SALTA - Valores Acumulados (RDS)';
-  ws.getCell(1, 1).font = { bold: true, size: 14 };
+  ws.getCell(1, 1).value = 'CASA REAL SALTA — Valores Acumulados (RDS)';
+  ws.getCell(1, 1).font = { bold: true, size: 14, color: { argb: 'FF1E293B' } };
   ws.getCell(1, 1).alignment = { horizontal: 'center' };
 
   ws.mergeCells(2, 1, 2, totalCols);
-  ws.getCell(2, 1).value = 'Períodos acumulados al cierre de cada mes';
-  ws.getCell(2, 1).font = { italic: true };
+  // Subtitle: months covered (range from first → last period).
+  let subtitle = 'Períodos acumulados al cierre de cada mes';
+  if (periodsRows.length > 0) {
+    const first = new Date(periodsRows[0].period as unknown as string);
+    const last = new Date(periodsRows[periodsRows.length - 1].period as unknown as string);
+    const range =
+      first.getTime() === last.getTime()
+        ? `${monthLabelEs(first)} ${first.getUTCFullYear()}`
+        : `${monthLabelEs(first)} ${first.getUTCFullYear()} — ${monthLabelEs(last)} ${last.getUTCFullYear()}`;
+    subtitle = `${range} · ${periodsRows.length} período${periodsRows.length === 1 ? '' : 's'}`;
+  }
+  ws.getCell(2, 1).value = subtitle;
+  ws.getCell(2, 1).font = { italic: true, color: { argb: 'FF475569' } }; // slate-600
   ws.getCell(2, 1).alignment = { horizontal: 'center' };
 
   // Row 3 blank.
 
-  // Row 4: column headers.
+  // Row 4: column headers — dark fill + white text for contrast.
   const headerRow = ws.getRow(4);
+  headerRow.height = 22;
+  for (let col = 1; col <= totalCols; col++) {
+    const cell = headerRow.getCell(col);
+    cell.fill = FILL_HEADER;
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.alignment = { horizontal: col === 1 ? 'left' : 'center', vertical: 'middle' };
+  }
   headerRow.getCell(1).value = 'Concepto';
-  headerRow.getCell(1).font = { bold: true };
   for (let i = 0; i < periodsRows.length; i++) {
     const p = periodsRows[i];
     const period = new Date(p.period as unknown as string);
     const refDate = new Date(p.referenceDate as unknown as string);
     headerRow.getCell(2 + i).value = `${monthLabelEs(period)} (al ${formatRefDateShort(refDate)})`;
-    headerRow.getCell(2 + i).font = { bold: true };
-    headerRow.getCell(2 + i).alignment = { horizontal: 'center' };
   }
 
   // Body: groups → concepts → (subtotal) → blank.
@@ -223,21 +259,29 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
     const groupHeaderName = showSubtotal
       ? `GRUPO ${block.name.toUpperCase()}`
       : block.displayName.toUpperCase();
+    const groupFill = block.kind === 'revenue' ? FILL_GROUP_REVENUE : FILL_GROUP_OTHER;
+    for (let col = 1; col <= totalCols; col++) {
+      const cell = ws.getCell(rowIdx, col);
+      cell.fill = groupFill;
+      cell.font = { bold: true, color: { argb: 'FF1E293B' } };
+    }
     ws.getCell(rowIdx, 1).value = groupHeaderName;
-    ws.getCell(rowIdx, 1).font = { bold: true };
     rowIdx++;
 
     // Concept rows.
     const subtotals: number[] = new Array(periodsRows.length).fill(0);
     for (const c of block.concepts) {
       ws.getCell(rowIdx, 1).value = titleCaseEs(c.canonicalName);
+      const fmt = pickNumFmt(c.canonicalName);
       for (let i = 0; i < periodsRows.length; i++) {
         const v = c.values[i];
         const cell = ws.getCell(rowIdx, 2 + i);
         if (v !== null) {
           cell.value = v;
-          cell.numFmt = '#,##0.00;[Red]-#,##0.00';
-          subtotals[i] += v;
+          cell.numFmt = fmt;
+          // Only sum currency rows into the subtotal — averaging room counts
+          // or %s across line items is meaningless.
+          if (fmt.includes('0.00;')) subtotals[i] += v;
         }
       }
       rowIdx++;
@@ -247,14 +291,17 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
       // Subtotal row. Round to 2 decimals to avoid float-accumulation drift
       // (e.g. 201572711.70000002).
       const subtotalLabel = `Subtotal ${titleCaseEs(block.name)}`;
-      const subtotalRowCell = ws.getCell(rowIdx, 1);
-      subtotalRowCell.value = subtotalLabel;
-      subtotalRowCell.font = { bold: true };
+      for (let col = 1; col <= totalCols; col++) {
+        const cell = ws.getCell(rowIdx, col);
+        cell.fill = FILL_SUBTOTAL;
+        cell.font = { bold: true, color: { argb: 'FF1E293B' } };
+        cell.border = BORDER_THIN_TOP;
+      }
+      ws.getCell(rowIdx, 1).value = subtotalLabel;
       for (let i = 0; i < periodsRows.length; i++) {
         const cell = ws.getCell(rowIdx, 2 + i);
         cell.value = Math.round(subtotals[i] * 100) / 100;
         cell.numFmt = '#,##0.00;[Red]-#,##0.00';
-        cell.font = { bold: true };
       }
       rowIdx++;
     }
@@ -268,6 +315,16 @@ export async function buildAcumuladosXlsx(opts: BuildAcumuladosOpts): Promise<Bu
   for (let i = 0; i < periodsRows.length; i++) {
     ws.getColumn(2 + i).width = 22;
   }
+
+  // Freeze panes: keep the header row and the concept column visible while
+  // scrolling through the body.
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4 }];
+
+  // AutoFilter on the header row across all columns.
+  ws.autoFilter = {
+    from: { row: 4, column: 1 },
+    to: { row: 4, column: totalCols },
+  };
 
   const arrayBuf = await wb.xlsx.writeBuffer();
   return Buffer.from(arrayBuf);
