@@ -1,4 +1,4 @@
-import { parseRdsPdf } from '../lib/parser/index.ts';
+import { parseRdsPdf } from '../lib/parser/index';
 import { readFileSync } from 'node:fs';
 
 async function main() {
