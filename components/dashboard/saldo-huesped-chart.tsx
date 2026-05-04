@@ -1,7 +1,7 @@
 'use client';
 /**
- * Monthly total revenue trend (line + area). Single series, primary color.
- * Tooltip formats values as ARS currency.
+ * Evolución de Saldo Actual Huésped: month-end accumulated guest balance.
+ * Single-series line + soft area, distinct color from Cuentas por Cobrar.
  */
 import {
   Area,
@@ -24,23 +24,30 @@ const ARS = new Intl.NumberFormat('es-AR', {
   maximumFractionDigits: 0,
 });
 
+const COL = '#A855F7'; // purple-500
+
 interface Datum {
   label: string;
-  total?: number;
+  saldo?: number;
 }
 
-export function RevenueTrendChart({ data }: { data: Datum[] }) {
+export function SaldoHuespedChart({ data }: { data: Datum[] }) {
   return (
     <ResponsiveContainer width="100%" height={260}>
       <ComposedChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
         <defs>
-          <linearGradient id="revFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="var(--primary)" stopOpacity={0.35} />
-            <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+          <linearGradient id="saldoFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={COL} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={COL} stopOpacity={0} />
           </linearGradient>
         </defs>
         <CartesianGrid stroke="var(--border)" strokeDasharray="2 4" vertical={false} />
-        <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }} />
+        <XAxis
+          dataKey="label"
+          tickLine={false}
+          axisLine={false}
+          tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+        />
         <YAxis
           tickLine={false}
           axisLine={false}
@@ -57,16 +64,16 @@ export function RevenueTrendChart({ data }: { data: Datum[] }) {
             color: 'var(--popover-foreground)',
             fontSize: 12,
           }}
-          formatter={(v) => [ARS.format(Number(v)), 'Ingresos']}
           labelStyle={{ color: 'var(--muted-foreground)', fontSize: 11 }}
+          formatter={(v) => [ARS.format(Number(v)), 'Saldo Actual Huésped']}
         />
-        <Area type="monotone" dataKey="total" stroke="none" fill="url(#revFill)" />
+        <Area type="monotone" dataKey="saldo" stroke="none" fill="url(#saldoFill)" />
         <Line
           type="monotone"
-          dataKey="total"
-          stroke="var(--primary)"
+          dataKey="saldo"
+          stroke={COL}
           strokeWidth={2}
-          dot={{ r: 3, fill: 'var(--primary)', strokeWidth: 0 }}
+          dot={{ r: 3, fill: COL, strokeWidth: 0 }}
           activeDot={{ r: 5 }}
         />
       </ComposedChart>

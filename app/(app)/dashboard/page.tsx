@@ -1,11 +1,12 @@
 /**
  * /dashboard — analytics overview for RDS reports.
- * - 4 KPI cards (latest period): revenue, occupancy %, REVPAR, diaria media (with MoM delta)
- * - Revenue trend (line + area)
- * - Occupancy & REVPAR (dual-axis line)
- * - Revenue group breakdown (stacked bars)
  *
- * Empty state mirrors /reportes when no periods loaded yet.
+ * Layout (top → bottom):
+ *   1. 4 KPI cards (latest period, with MoM delta)
+ *   2. Producción vs Cobrado — grouped bars per month
+ *   3. Cuentas por Cobrar    — line trend
+ *   4. Estadísticas          — habs disp/ocup bars + % ocupación line
+ *   5. Saldo Actual Huésped  — line trend
  */
 import Link from 'next/link';
 import { ArrowRightIcon, BarChart3Icon } from 'lucide-react';
@@ -13,9 +14,10 @@ import { getDashboardData } from '@/lib/dashboard/queries';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { buttonVariants } from '@/components/ui/button';
 import { KpiCard } from '@/components/dashboard/kpi-card';
-import { RevenueTrendChart } from '@/components/dashboard/revenue-trend-chart';
-import { OccupancyRevparChart } from '@/components/dashboard/occupancy-revpar-chart';
-import { GroupBreakdownChart } from '@/components/dashboard/group-breakdown-chart';
+import { ProductionChargedChart } from '@/components/dashboard/production-charged-chart';
+import { AccountsReceivableChart } from '@/components/dashboard/accounts-receivable-chart';
+import { StatsChart } from '@/components/dashboard/stats-chart';
+import { SaldoHuespedChart } from '@/components/dashboard/saldo-huesped-chart';
 import { cn } from '@/lib/utils';
 
 export const metadata = { title: 'Dashboard — Casa Real Analytics' };
@@ -47,7 +49,18 @@ function pctDelta(curr: number | undefined, prev: number | undefined): {
 
 export default async function DashboardPage() {
   const data = await getDashboardData(REPORT_TYPE);
-  const { periods, totalRevenue, occupancy, revpar, diariaMedia, revenueGroups } = data;
+  const {
+    periods,
+    production,
+    charged,
+    cuentasPorCobrar,
+    saldoActual,
+    habsDisponibles,
+    habsOcupadas,
+    ocupacion,
+    revpar,
+    diariaMedia,
+  } = data;
 
   if (periods.length === 0) {
     return (
@@ -85,16 +98,16 @@ export default async function DashboardPage() {
   const latest = periods[periods.length - 1];
   const prev = periods.length > 1 ? periods[periods.length - 2] : undefined;
 
-  const revCurr = totalRevenue[latest.id];
-  const revPrev = prev ? totalRevenue[prev.id] : undefined;
-  const ocupCurr = occupancy[latest.id];
-  const ocupPrev = prev ? occupancy[prev.id] : undefined;
+  const prodCurr = production[latest.id];
+  const prodPrev = prev ? production[prev.id] : undefined;
+  const ocupCurr = ocupacion[latest.id];
+  const ocupPrev = prev ? ocupacion[prev.id] : undefined;
   const revparCurr = revpar[latest.id];
   const revparPrev = prev ? revpar[prev.id] : undefined;
   const dmCurr = diariaMedia[latest.id];
   const dmPrev = prev ? diariaMedia[prev.id] : undefined;
 
-  const revDelta = pctDelta(revCurr, revPrev);
+  const prodDelta = pctDelta(prodCurr, prodPrev);
   const ocupDelta =
     ocupCurr !== undefined && ocupPrev !== undefined
       ? {
@@ -105,29 +118,36 @@ export default async function DashboardPage() {
   const revparDelta = pctDelta(revparCurr, revparPrev);
   const dmDelta = pctDelta(dmCurr, dmPrev);
 
-  // Time series for charts: one row per period, indexed by label.
-  const trendSeries = periods.map((p) => ({
-    label: p.label,
-    total: totalRevenue[p.id],
-  }));
-
-  const ocupRevparSeries = periods.map((p) => ({
-    label: p.label,
-    ocup: occupancy[p.id],
-    revpar: revpar[p.id],
-  }));
-
-  // Stacked-bar series: each row has one numeric field per revenue group.
-  const groupBreakdownSeries = periods.map((p) => {
-    const row: { label: string; [k: string]: string | number | undefined } = { label: p.label };
-    for (const g of revenueGroups) row[g.groupName] = g.values[p.id] ?? 0;
-    return row;
+  // Chart series — one row per period, indexed by short month label.
+  const productionChargedSeries = periods.map((p) => {
+    const prod = production[p.id];
+    const cobr = charged[p.id];
+    const pct =
+      prod !== undefined && prod !== 0 && cobr !== undefined ? (cobr / prod) * 100 : null;
+    return {
+      label: p.label,
+      produccion: prod,
+      cobrado: cobr,
+      pctCobrado: pct,
+    };
   });
 
-  // Filter groups that are zero across the board (avoids empty stacks).
-  const activeGroups = revenueGroups.filter((g) =>
-    periods.some((p) => (g.values[p.id] ?? 0) !== 0),
-  );
+  const cuentasSeries = periods.map((p) => ({
+    label: p.label,
+    cuentas: cuentasPorCobrar[p.id],
+  }));
+
+  const statsSeries = periods.map((p) => ({
+    label: p.label,
+    disponibles: habsDisponibles[p.id],
+    ocupadas: habsOcupadas[p.id],
+    ocupacion: ocupacion[p.id],
+  }));
+
+  const saldoSeries = periods.map((p) => ({
+    label: p.label,
+    saldo: saldoActual[p.id],
+  }));
 
   return (
     <div className="flex flex-col gap-6">
@@ -142,10 +162,10 @@ export default async function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
-          label="Ingresos totales"
-          value={revCurr !== undefined ? ARS.format(revCurr) : '—'}
-          delta={revDelta.label}
-          positive={revDelta.positive}
+          label="Producción"
+          value={prodCurr !== undefined ? ARS.format(prodCurr) : '—'}
+          delta={prodDelta.label}
+          positive={prodDelta.positive}
         />
         <KpiCard
           label="Ocupación"
@@ -169,35 +189,48 @@ export default async function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Evolución de ingresos</CardTitle>
-          <CardDescription>Total mensual (Total de los Grupos).</CardDescription>
+          <CardTitle>Producción vs Cobrado</CardTitle>
+          <CardDescription>
+            Producción mensual (suma de los 7 grupos de ingresos) comparada con lo efectivamente
+            cobrado (Formas de Cobro sin Cuentas por Cobrar).
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <RevenueTrendChart data={trendSeries} />
+          <ProductionChargedChart data={productionChargedSeries} />
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Ocupación &amp; REVPAR</CardTitle>
-            <CardDescription>Porcentaje de ocupación y revenue per available room.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OccupancyRevparChart data={ocupRevparSeries} />
-          </CardContent>
-        </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Cuentas por Cobrar</CardTitle>
+          <CardDescription>Evolución mensual del saldo a cobrar.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AccountsReceivableChart data={cuentasSeries} />
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Ingresos por grupo</CardTitle>
-            <CardDescription>Composición de ingresos por familia (HOSPEDAJE, A&amp;B, EVENTOS, …).</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <GroupBreakdownChart data={groupBreakdownSeries} groups={activeGroups} />
-          </CardContent>
-        </Card>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Estadísticas</CardTitle>
+          <CardDescription>
+            Habitaciones disponibles vs ocupadas y % de ocupación por mes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <StatsChart data={statsSeries} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Saldo Actual Huésped</CardTitle>
+          <CardDescription>Acumulación al cierre de cada mes.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SaldoHuespedChart data={saldoSeries} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

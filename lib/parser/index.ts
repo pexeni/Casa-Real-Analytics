@@ -14,7 +14,7 @@
 import { extractText, getDocumentProxy } from 'unpdf';
 import type { RawParsedReport, RawParsedRow } from '@/lib/domain/types';
 
-export const PARSER_VERSION = 'rds-v0.2.1';
+export const PARSER_VERSION = 'rds-v0.3.0';
 
 /**
  * Argentine number format: thousands `.`, decimal `,`, 1 or 2 decimal places.
@@ -162,6 +162,10 @@ export async function parseRdsPdf(pdfBytes: Uint8Array): Promise<RawParsedReport
   rows.push(...statsRows);
   warnings.push(...statsWarnings);
 
+  const { rows: subtotalRows, warnings: subtotalWarnings } = extractSubtotals(items);
+  rows.push(...subtotalRows);
+  warnings.push(...subtotalWarnings);
+
   return {
     hotel,
     referenceDate,
@@ -212,6 +216,10 @@ const COL = {
   // Totales y Saldos table (right half)
   totalsHoy:   { xRightEnd: 458, tol: 8 },
   totalsAcum:  { xRightEnd: 567, tol: 8 },
+  // Per-group "Subtotal:" rows (body, left-aligned with the group tables).
+  // The label sits standalone at x≈23 — values land in two fixed-right columns.
+  subtotalHoy:  { xRightEnd: 146, tol: 4 },
+  subtotalAcum: { xRightEnd: 255, tol: 4 },
 } as const satisfies Record<string, RightCol>;
 
 function inCol(item: PositionedItem, col: RightCol): boolean {
@@ -325,6 +333,81 @@ function resolveKpiValue(
   const acum = findValueInCol(items, labelY, KPI_COL_ACUM);
   if (acum !== null) return acum;
   return findValueInCol(items, labelY, KPI_COL_HOY);
+}
+
+/**
+ * Extract one Subtotal row per body group. The PDF lays out each "Grupo X" as
+ * a left-column header, with line items below it and a "Subtotal:" label
+ * closing the section — values for the subtotal sit in the body subtotalHoy /
+ * subtotalAcum columns. We pair each "Grupo" header (token + group name on the
+ * same y) with the next "Subtotal:" label below it (smaller y), then read the
+ * Acumulado column at that y.
+ *
+ * Emits rows shaped like line items so the rest of the pipeline (normalizer →
+ * DB) treats them as ordinary concepts, with rawName "Subtotal {GroupName}".
+ * The dashboard layer detects them by canonicalName prefix.
+ */
+function extractSubtotals(items: PositionedItem[]): {
+  rows: RawParsedRow[];
+  warnings: string[];
+} {
+  const out: RawParsedRow[] = [];
+  const warnings: string[] = [];
+
+  // Pair each "Grupo" token with the group name on the same y (within tol).
+  const groupHeaders = items
+    .filter((i) => i.str === 'Grupo' && i.x < 60)
+    .map((g) => {
+      const name = items.find(
+        (j) => Math.abs(j.y - g.y) < Y_TOL && j.x > g.x && j.x < 200,
+      );
+      return name ? { y: g.y, name: name.str.trim() } : null;
+    })
+    .filter((h): h is { y: number; name: string } => h !== null)
+    .sort((a, b) => b.y - a.y); // top-down (PDF y descends)
+
+  // All standalone "Subtotal:" labels in the body left column (excludes
+  // "Subtotal de Grupos:" which is the page total, not a group total).
+  const subtotalLabels = items
+    .filter((i) => i.str === 'Subtotal:' && i.x < 60)
+    .sort((a, b) => b.y - a.y);
+
+  for (const group of groupHeaders) {
+    // First "Subtotal:" strictly below this group header but above the next
+    // group header (or 0 if last). Subtotals can sit very close to the next
+    // group, so any subtotal in the (nextGroupY, groupY) window is valid.
+    const nextGroupY = groupHeaders
+      .filter((g) => g.y < group.y)
+      .reduce((max, g) => Math.max(max, g.y), 0);
+
+    const subtotal = subtotalLabels.find(
+      (s) => s.y < group.y && s.y > nextGroupY,
+    );
+    if (!subtotal) {
+      warnings.push(`subtotal: not found for group "${group.name}"`);
+      continue;
+    }
+
+    const acum = findValueInCol(items, subtotal.y, COL.subtotalAcum);
+    const hoy = findValueInCol(items, subtotal.y, COL.subtotalHoy);
+    if (acum === null) {
+      warnings.push(
+        `subtotal: no Acumulado value for "${group.name}" near y=${subtotal.y.toFixed(1)}`,
+      );
+      continue;
+    }
+
+    out.push({
+      rawName: `Subtotal ${group.name}`,
+      groupName: group.name,
+      valorHoy: hoy,
+      valorAcumulado: acum,
+      pctHoy: null,
+      pctAcumulado: null,
+    });
+  }
+
+  return { rows: out, warnings };
 }
 
 function extractStatsAndKpis(items: PositionedItem[]): {
